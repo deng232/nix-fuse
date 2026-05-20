@@ -1,0 +1,198 @@
+    Checking nix-closure-fuser v0.1.0 (/home/deng/nix-fuse)
+error[E0107]: struct takes 0 lifetime arguments but 1 lifetime argument was supplied
+   --> src/lib.rs:441:16
+    |
+441 |         _req: &Request<'_>,
+    |                ^^^^^^^---- help: remove the unnecessary generics
+    |                |
+    |                expected 0 lifetime arguments
+    |
+note: struct defined here, with 0 lifetime parameters
+   --> /home/deng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fuser-0.17.0/src/request_param.rs:10:12
+    |
+ 10 | pub struct Request {
+    |            ^^^^^^^
+
+error[E0053]: method `init` has an incompatible type for trait
+   --> src/lib.rs:443:10
+    |
+443 |     ) -> std::result::Result<(), fuser::Errno> {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `std::io::Error`, found `fuser::Errno`
+    |
+    = note: expected signature `fn(&mut PathViewFs, &fuser::Request, &mut KernelConfig) -> Result<_, std::io::Error>`
+               found signature `fn(&mut PathViewFs, &fuser::Request, &mut KernelConfig) -> Result<_, fuser::Errno>`
+help: change the output type to match the trait
+    |
+443 -     ) -> std::result::Result<(), fuser::Errno> {
+443 +     ) -> Result<(), std::io::Error> {
+    |
+
+error[E0107]: struct takes 0 lifetime arguments but 1 lifetime argument was supplied
+   --> src/lib.rs:450:29
+    |
+450 | ...(&self, _req: &Request<'_>, parent: INodeNo, name...
+    |                   ^^^^^^^---- help: remove the unnecessary generics
+    |                   |
+    |                   expected 0 lifetime arguments
+    |
+note: struct defined here, with 0 lifetime parameters
+   --> /home/deng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fuser-0.17.0/src/request_param.rs:10:12
+    |
+ 10 | pub struct Request {
+    |            ^^^^^^^
+
+error[E0107]: struct takes 0 lifetime arguments but 1 lifetime argument was supplied
+   --> src/lib.rs:462:16
+    |
+462 |         _req: &Request<'_>,
+    |                ^^^^^^^---- help: remove the unnecessary generics
+    |                |
+    |                expected 0 lifetime arguments
+    |
+note: struct defined here, with 0 lifetime parameters
+   --> /home/deng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fuser-0.17.0/src/request_param.rs:10:12
+    |
+ 10 | pub struct Request {
+    |            ^^^^^^^
+
+error[E0107]: struct takes 0 lifetime arguments but 1 lifetime argument was supplied
+   --> src/lib.rs:473:31
+    |
+473 | ...(&self, _req: &Request<'_>, ino: INodeNo, reply: ...
+    |                   ^^^^^^^---- help: remove the unnecessary generics
+    |                   |
+    |                   expected 0 lifetime arguments
+    |
+note: struct defined here, with 0 lifetime parameters
+   --> /home/deng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fuser-0.17.0/src/request_param.rs:10:12
+    |
+ 10 | pub struct Request {
+    |            ^^^^^^^
+
+error[E0107]: struct takes 0 lifetime arguments but 1 lifetime argument was supplied
+   --> src/lib.rs:480:30
+    |
+480 | ...(&self, _req: &Request<'_>, ino: INodeNo, _flags:...
+    |                   ^^^^^^^---- help: remove the unnecessary generics
+    |                   |
+    |                   expected 0 lifetime arguments
+    |
+note: struct defined here, with 0 lifetime parameters
+   --> /home/deng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fuser-0.17.0/src/request_param.rs:10:12
+    |
+ 10 | pub struct Request {
+    |            ^^^^^^^
+
+error[E0107]: struct takes 0 lifetime arguments but 1 lifetime argument was supplied
+   --> src/lib.rs:490:16
+    |
+490 |         _req: &Request<'_>,
+    |                ^^^^^^^---- help: remove the unnecessary generics
+    |                |
+    |                expected 0 lifetime arguments
+    |
+note: struct defined here, with 0 lifetime parameters
+   --> /home/deng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fuser-0.17.0/src/request_param.rs:10:12
+    |
+ 10 | pub struct Request {
+    |            ^^^^^^^
+
+error[E0107]: struct takes 0 lifetime arguments but 1 lifetime argument was supplied
+   --> src/lib.rs:533:16
+    |
+533 |         _req: &Request<'_>,
+    |                ^^^^^^^---- help: remove the unnecessary generics
+    |                |
+    |                expected 0 lifetime arguments
+    |
+note: struct defined here, with 0 lifetime parameters
+   --> /home/deng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fuser-0.17.0/src/request_param.rs:10:12
+    |
+ 10 | pub struct Request {
+    |            ^^^^^^^
+
+error[E0107]: struct takes 0 lifetime arguments but 1 lifetime argument was supplied
+   --> src/lib.rs:542:27
+    |
+542 | ...(&self, _req: &Request<'_>, ino: INodeNo, flags: ...
+    |                   ^^^^^^^---- help: remove the unnecessary generics
+    |                   |
+    |                   expected 0 lifetime arguments
+    |
+note: struct defined here, with 0 lifetime parameters
+   --> /home/deng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fuser-0.17.0/src/request_param.rs:10:12
+    |
+ 10 | pub struct Request {
+    |            ^^^^^^^
+
+error[E0107]: struct takes 0 lifetime arguments but 1 lifetime argument was supplied
+   --> src/lib.rs:599:16
+    |
+599 |         _req: &Request<'_>,
+    |                ^^^^^^^---- help: remove the unnecessary generics
+    |                |
+    |                expected 0 lifetime arguments
+    |
+note: struct defined here, with 0 lifetime parameters
+   --> /home/deng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fuser-0.17.0/src/request_param.rs:10:12
+    |
+ 10 | pub struct Request {
+    |            ^^^^^^^
+
+error[E0107]: struct takes 0 lifetime arguments but 1 lifetime argument was supplied
+   --> src/lib.rs:623:16
+    |
+623 |         _req: &Request<'_>,
+    |                ^^^^^^^---- help: remove the unnecessary generics
+    |                |
+    |                expected 0 lifetime arguments
+    |
+note: struct defined here, with 0 lifetime parameters
+   --> /home/deng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fuser-0.17.0/src/request_param.rs:10:12
+    |
+ 10 | pub struct Request {
+    |            ^^^^^^^
+
+error[E0107]: struct takes 0 lifetime arguments but 1 lifetime argument was supplied
+   --> src/lib.rs:635:29
+    |
+635 | ...(&self, _req: &Request<'_>, ino: INodeNo, mask: A...
+    |                   ^^^^^^^---- help: remove the unnecessary generics
+    |                   |
+    |                   expected 0 lifetime arguments
+    |
+note: struct defined here, with 0 lifetime parameters
+   --> /home/deng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fuser-0.17.0/src/request_param.rs:10:12
+    |
+ 10 | pub struct Request {
+    |            ^^^^^^^
+
+error[E0107]: struct takes 0 lifetime arguments but 1 lifetime argument was supplied
+   --> src/lib.rs:643:29
+    |
+643 | ...(&self, _req: &Request<'_>, _ino: INodeNo, reply:...
+    |                   ^^^^^^^---- help: remove the unnecessary generics
+    |                   |
+    |                   expected 0 lifetime arguments
+    |
+note: struct defined here, with 0 lifetime parameters
+   --> /home/deng/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/fuser-0.17.0/src/request_param.rs:10:12
+    |
+ 10 | pub struct Request {
+    |            ^^^^^^^
+
+error[E0499]: cannot borrow `tree.nodes` as mutable more than once at a time
+   --> src/lib.rs:194:21
+    |
+192 |             match tree.nodes.get_mut(&ino) {
+    |                   ---------- first mutable borrow occurs here
+193 |                 Some(Node::VirtualDir { p...
+194 |                     tree.nodes.insert(
+    |                     ^^^^^^^^^^ second mutable borrow occurs here
+...
+199 |                             parent: *parent,
+    |                                     ------- first borrow later used here
+
+Some errors have detailed explanations: E0053, E0107, E0499.
+For more information about an error, try `rustc --explain E0053`.
+error: could not compile `nix-closure-fuser` (lib) due to 14 previous errors

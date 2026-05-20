@@ -1,0 +1,9 @@
+[package]
+name = "nix-closure-fuser"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+fuser = "0.17"
+nix = { version = "0.31", features = ["fs"] }
