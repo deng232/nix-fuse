@@ -1,3 +1,24 @@
+    Checking libc v0.2.186
+    Checking memoffset v0.9.1
+    Checking zerocopy v0.8.48
+    Checking ref-cast v1.0.25
+    Checking anyhow v1.0.102
+    Checking num_enum v0.7.6
+    Checking parking_lot_core v0.9.12
+    Checking page_size v0.6.0
+    Checking nix v0.30.1
+    Checking nix v0.31.3
+    Checking parking_lot v0.12.5
+    Checking fuser v0.17.0
+    Checking nix-closure-fuser v0.1.0 (/home/deng/nix-fuse)
+error[E0308]: mismatched types
+   --> src/lib.rs:463:20
+    |
+462 |             match config.set_max_stack_depth(requested_stack_depth) {
+    |                   ------------------------------------------------- this expression has type `Result<u32, u32>`
+463 |                 Ok(()) => {
+    |                    ^^ expected `u32`, found `()`
+
 warning: unused variable: `existing_allow_descendants`
    --> src/lib.rs:207:40
     |
@@ -6,16 +27,6 @@ warning: unused variable: `existing_allow_descendants`
     |
     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
 
-warning: field `virtual_path` is never read
-  --> src/lib.rs:34:9
-   |
-33 |     VirtualDir {
-   |     ---------- field in this variant
-34 |         virtual_path: PathBuf,
-   |         ^^^^^^^^^^^^
-   |
-   = note: `Node` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
-   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-warning: `nix-closure-fuser` (lib) generated 2 warnings (run `cargo fix --lib -p nix-closure-fuser` to apply 1 suggestion)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+For more information about this error, try `rustc --explain E0308`.
+warning: `nix-closure-fuser` (lib) generated 1 warning
+error: could not compile `nix-closure-fuser` (lib) due to 1 previous error; 1 warning emitted

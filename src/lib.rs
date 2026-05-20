@@ -21,6 +21,7 @@ use nix::errno::Errno;
 
 const ROOT_INO: INodeNo = INodeNo::ROOT;
 const TTL: Duration = Duration::from_secs(1);
+const CAP_SYS_ADMIN_BIT: u32 = 21;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PathViewOptions {
@@ -204,7 +205,7 @@ impl PathViewFs {
                 }
                 Some(Node::Real {
                     real_path: existing_real,
-                    allow_descendants: existing_allow_descendants,
+                    allow_descendants: _,
                     ..
                 }) => {
                     if existing_real != real_path {
@@ -447,9 +448,37 @@ impl PathViewFs {
 
 impl Filesystem for PathViewFs {
     fn init(&mut self, _req: &Request, config: &mut KernelConfig) -> io::Result<()> {
+        eprintln!(
+            "init: passthrough_requested={}, no_exec={}",
+            self.options.enable_passthrough, self.options.no_exec
+        );
+        log_capability_diagnostics();
+
         if self.options.enable_passthrough {
-            let _ = config.set_max_stack_depth(1);
+            let requested_stack_depth = 1;
+            eprintln!(
+                "init: attempting passthrough setup with max_stack_depth={}",
+                requested_stack_depth
+            );
+
+            match config.set_max_stack_depth(requested_stack_depth) {
+                Ok(actual_stack_depth) => {
+                    eprintln!(
+                        "init: set_max_stack_depth({}) succeeded, negotiated={}",
+                        requested_stack_depth, actual_stack_depth
+                    );
+                }
+                Err(err) => {
+                    eprintln!(
+                        "init: set_max_stack_depth({}) failed: {}",
+                        requested_stack_depth, err
+                    );
+                }
+            }
+        } else {
+            eprintln!("init: passthrough disabled");
         }
+
         Ok(())
     }
 
@@ -590,7 +619,7 @@ impl Filesystem for PathViewFs {
                         real_path.display(),
                         err
                     );
-                    reply.error(fuser::Errno::EIO);
+                    reply.error(fuser_errno_from_io(&err));
                     return;
                 }
             }
@@ -793,6 +822,43 @@ fn errno_from_io(err: &io::Error) -> Errno {
 
 fn fuser_errno_from_io(err: &io::Error) -> fuser::Errno {
     fuser::Errno::from_i32(errno_from_io(err) as i32)
+}
+
+fn log_capability_diagnostics() {
+    match read_cap_eff_hex() {
+        Ok(cap_eff_hex) => {
+            let has_cap_sys_admin = cap_eff_hex
+                .checked_shr(CAP_SYS_ADMIN_BIT)
+                .map(|value| (value & 1) == 1)
+                .unwrap_or(false);
+            eprintln!(
+                "init: capability check: CapEff=0x{cap_eff_hex:016x}, CAP_SYS_ADMIN={}",
+                has_cap_sys_admin
+            );
+        }
+        Err(err) => {
+            eprintln!("init: capability check failed: {}", err);
+        }
+    }
+}
+
+fn read_cap_eff_hex() -> io::Result<u64> {
+    let status = fs::read_to_string("/proc/self/status")?;
+    for line in status.lines() {
+        if let Some(value) = line.strip_prefix("CapEff:\t") {
+            return u64::from_str_radix(value.trim(), 16).map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("failed to parse CapEff value {value:?}: {err}"),
+                )
+            });
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "CapEff not found in /proc/self/status",
+    ))
 }
 
 #[cfg(test)]
