@@ -14,8 +14,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, Context, Result};
 use fuser::{
     AccessFlags, BackingId, Config, FileAttr, FileHandle, FileType, Filesystem, FopenFlags,
-    Generation, INodeNo, KernelConfig, LockOwner, MountOption, OpenAccMode, OpenFlags, ReplyAttr,
-    ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, Request,
+    Generation, INodeNo, InitFlags, KernelConfig, LockOwner, MountOption, OpenAccMode, OpenFlags,
+    ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, Request,
 };
 use nix::errno::Errno;
 
@@ -453,8 +453,21 @@ impl Filesystem for PathViewFs {
             self.options.enable_passthrough, self.options.no_exec
         );
         log_capability_diagnostics();
+        eprintln!("init: kernel capabilities: {:?}", config.capabilities());
 
         if self.options.enable_passthrough {
+            match config.add_capabilities(InitFlags::FUSE_PASSTHROUGH) {
+                Ok(()) => {
+                    eprintln!("init: requested FUSE_PASSTHROUGH capability successfully");
+                }
+                Err(unsupported) => {
+                    eprintln!(
+                        "init: failed to request FUSE_PASSTHROUGH capability, unsupported bits: {:?}",
+                        unsupported
+                    );
+                }
+            }
+
             let requested_stack_depth = 1;
             eprintln!(
                 "init: attempting passthrough setup with max_stack_depth={}",
