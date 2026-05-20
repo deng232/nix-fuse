@@ -927,13 +927,13 @@ Do this only after normal read-only behavior works.
 ### Add `init`
 
 ```rust
-fn init(&mut self, _req: &Request<'_>, config: &mut KernelConfig) -> Result<(), libc::c_int> {
+fn init(&mut self, _req: &Request<'_>, config: &mut KernelConfig) -> Result<(), nix::errno::Errno> {
     let _ = config.set_max_stack_depth(1);
     Ok(())
 }
 ```
 
-`set_max_stack_depth(1)` is needed for backing-file passthrough. If the exact return type differs in the selected `fuser` version, follow that version's trait signature.
+`set_max_stack_depth(1)` is needed for backing-file passthrough. If the exact return type differs in the selected `fuser` version, follow that version's trait signature. Prefer `nix::errno::Errno` in our code instead of exposing raw `libc` error integers.
 
 ### Update `open`
 
@@ -995,7 +995,7 @@ BackingId must remain alive until release()
 We need a helper:
 
 ```rust
-fn errno_from_io(err: io::Error) -> Errno;
+fn errno_from_io(err: io::Error) -> nix::errno::Errno;
 ```
 
 Suggested mapping:
@@ -1011,7 +1011,7 @@ other raw_os_error -> that errno
 fallback           -> EIO
 ```
 
-Depending on `fuser` version, `reply.error()` may want `libc::c_int`, `Errno`, or a crate-specific errno type. Follow compile errors.
+Depending on `fuser` version, `reply.error()` may accept an errno-like type or raw OS errno value. In our code, prefer `nix::errno::Errno` as the internal representation and convert only at the boundary if the exact `fuser` version requires it. Follow compile errors.
 
 ## Read-only behavior
 
@@ -1185,11 +1185,11 @@ Dependencies:
 ```toml
 [dependencies]
 fuser = "0.17"
-libc = "0.2"
+nix = { version = "0.31", features = ["fs"] }
 anyhow = "1"
 ```
 
-Add `nix` only if needed for errno/openat helpers.
+Use `nix` for Unix-facing helpers such as `Errno`, `openat`/`openat2`-style hardening work, file metadata helpers, and other Linux/POSIX interfaces. Avoid depending directly on `libc` unless a needed API is not exposed by `nix`.
 
 ### Phase 1: in-memory virtual tree
 
