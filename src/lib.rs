@@ -189,14 +189,14 @@ impl PathViewFs {
         allow_descendants: bool,
     ) -> io::Result<INodeNo> {
         if let Some(&ino) = tree.path_index.get(&virtual_path) {
-            match tree.nodes.get_mut(&ino) {
+            match tree.nodes.get(&ino).cloned() {
                 Some(Node::VirtualDir { parent, .. }) => {
                     tree.nodes.insert(
                         ino,
                         Node::Real {
                             virtual_path: virtual_path.clone(),
                             real_path,
-                            parent: *parent,
+                            parent,
                             allow_descendants,
                         },
                     );
@@ -207,13 +207,21 @@ impl PathViewFs {
                     allow_descendants: existing_allow_descendants,
                     ..
                 }) => {
-                    if *existing_real != real_path {
+                    if existing_real != real_path {
                         return Err(io::Error::new(
                             io::ErrorKind::AlreadyExists,
                             format!("conflicting real path for {}", virtual_path.display()),
                         ));
                     }
-                    *existing_allow_descendants |= allow_descendants;
+                    if allow_descendants {
+                        if let Some(Node::Real {
+                            allow_descendants: existing_allow_descendants,
+                            ..
+                        }) = tree.nodes.get_mut(&ino)
+                        {
+                            *existing_allow_descendants = true;
+                        }
+                    }
                     return Ok(ino);
                 }
                 None => {
@@ -357,7 +365,9 @@ impl PathViewFs {
                 blksize: 4096,
                 flags: 0,
             }),
-            Node::Real { real_path, .. } => metadata_to_attr(ino, &fs::symlink_metadata(real_path)?),
+            Node::Real { real_path, .. } => {
+                metadata_to_attr(ino, &fs::symlink_metadata(real_path)?)
+            }
         }
     }
 
@@ -436,18 +446,14 @@ impl PathViewFs {
 }
 
 impl Filesystem for PathViewFs {
-    fn init(
-        &mut self,
-        _req: &Request<'_>,
-        config: &mut KernelConfig,
-    ) -> std::result::Result<(), fuser::Errno> {
+    fn init(&mut self, _req: &Request, config: &mut KernelConfig) -> io::Result<()> {
         if self.options.enable_passthrough {
             let _ = config.set_max_stack_depth(1);
         }
         Ok(())
     }
 
-    fn lookup(&self, _req: &Request<'_>, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
+    fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
         match self
             .resolve_child(parent, name)
             .and_then(|ino| self.attr_for_node(ino).map(|attr| (ino, attr)))
@@ -457,27 +463,21 @@ impl Filesystem for PathViewFs {
         }
     }
 
-    fn getattr(
-        &self,
-        _req: &Request<'_>,
-        ino: INodeNo,
-        _fh: Option<FileHandle>,
-        reply: ReplyAttr,
-    ) {
+    fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
         match self.attr_for_node(ino) {
             Ok(attr) => reply.attr(&TTL, &attr),
             Err(err) => reply.error(fuser_errno_from_io(&err)),
         }
     }
 
-    fn readlink(&self, _req: &Request<'_>, ino: INodeNo, reply: ReplyData) {
+    fn readlink(&self, _req: &Request, ino: INodeNo, reply: ReplyData) {
         match self.real_path_for_symlink(ino).and_then(fs::read_link) {
             Ok(target) => reply.data(target.as_os_str().as_bytes()),
             Err(err) => reply.error(fuser_errno_from_io(&err)),
         }
     }
 
-    fn opendir(&self, _req: &Request<'_>, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
+    fn opendir(&self, _req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
         if self.is_dir(ino) {
             reply.opened(FileHandle(0), FopenFlags::empty());
         } else {
@@ -487,7 +487,7 @@ impl Filesystem for PathViewFs {
 
     fn readdir(
         &self,
-        _req: &Request<'_>,
+        _req: &Request,
         ino: INodeNo,
         _fh: FileHandle,
         offset: u64,
@@ -501,7 +501,11 @@ impl Filesystem for PathViewFs {
             }
         };
 
-        let parent_ino = self.node(ino).ok().and_then(|node| node.parent()).unwrap_or(ROOT_INO);
+        let parent_ino = self
+            .node(ino)
+            .ok()
+            .and_then(|node| node.parent())
+            .unwrap_or(ROOT_INO);
         entries.insert(
             0,
             DirEntry {
@@ -530,7 +534,7 @@ impl Filesystem for PathViewFs {
 
     fn releasedir(
         &self,
-        _req: &Request<'_>,
+        _req: &Request,
         _ino: INodeNo,
         _fh: FileHandle,
         _flags: OpenFlags,
@@ -539,7 +543,7 @@ impl Filesystem for PathViewFs {
         reply.ok();
     }
 
-    fn open(&self, _req: &Request<'_>, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
+    fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
         if flags.acc_mode() != OpenAccMode::O_RDONLY {
             reply.error(fuser::Errno::EROFS);
             return;
@@ -580,7 +584,15 @@ impl Filesystem for PathViewFs {
                     reply.opened_passthrough(fh, FopenFlags::empty(), backing_id);
                     return;
                 }
-                Err(_) => {}
+                Err(err) => {
+                    eprintln!(
+                        "passthrough open failed for {}: {}",
+                        real_path.display(),
+                        err
+                    );
+                    reply.error(fuser::Errno::EIO);
+                    return;
+                }
             }
         }
 
@@ -596,7 +608,7 @@ impl Filesystem for PathViewFs {
 
     fn read(
         &self,
-        _req: &Request<'_>,
+        _req: &Request,
         _ino: INodeNo,
         fh: FileHandle,
         offset: u64,
@@ -620,7 +632,7 @@ impl Filesystem for PathViewFs {
 
     fn release(
         &self,
-        _req: &Request<'_>,
+        _req: &Request,
         _ino: INodeNo,
         fh: FileHandle,
         _flags: OpenFlags,
@@ -632,7 +644,7 @@ impl Filesystem for PathViewFs {
         reply.ok();
     }
 
-    fn access(&self, _req: &Request<'_>, ino: INodeNo, mask: AccessFlags, reply: ReplyEmpty) {
+    fn access(&self, _req: &Request, ino: INodeNo, mask: AccessFlags, reply: ReplyEmpty) {
         match self.attr_for_node(ino) {
             Ok(_) if mask.contains(AccessFlags::W_OK) => reply.error(fuser::Errno::EROFS),
             Ok(_) => reply.ok(),
@@ -640,7 +652,7 @@ impl Filesystem for PathViewFs {
         }
     }
 
-    fn statfs(&self, _req: &Request<'_>, _ino: INodeNo, reply: ReplyStatfs) {
+    fn statfs(&self, _req: &Request, _ino: INodeNo, reply: ReplyStatfs) {
         let files = self.tree.read().unwrap().nodes.len() as u64;
         reply.statfs(0, 0, 0, files, 0, 4096, 255, 4096);
     }
