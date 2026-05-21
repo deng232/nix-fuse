@@ -628,12 +628,10 @@ impl Filesystem for PathViewFs {
                 }
                 Err(err) => {
                     eprintln!(
-                        "passthrough open failed for {}: {}",
+                        "passthrough open failed for {}, falling back to userspace read: {}",
                         real_path.display(),
                         err
                     );
-                    reply.error(fuser_errno_from_io(&err));
-                    return;
                 }
             }
         }
@@ -726,6 +724,10 @@ pub fn mount_path_view(
 pub fn load_allowed_paths_from_file(path: &Path) -> Result<Vec<PathBuf>> {
     let contents =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    parse_allowed_paths(&contents, &path.display().to_string())
+}
+
+pub fn parse_allowed_paths(contents: &str, source_name: &str) -> Result<Vec<PathBuf>> {
     let mut allowed_paths = Vec::new();
 
     for (line_no, line) in contents.lines().enumerate() {
@@ -738,7 +740,7 @@ pub fn load_allowed_paths_from_file(path: &Path) -> Result<Vec<PathBuf>> {
         if !path_buf.is_absolute() {
             return Err(anyhow!(
                 "{}:{}: expected absolute path, got {}",
-                path.display(),
+                source_name,
                 line_no + 1,
                 trimmed
             ));

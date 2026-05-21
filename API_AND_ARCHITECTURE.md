@@ -2,22 +2,23 @@
 
 ## Purpose
 
-`nix-closure-fuser` is a read-only FUSE filesystem that exposes a filtered view of a selected set of absolute host paths.
+`nix-closure-fuser` is a read-only FUSE filesystem that exposes a filtered view of selected absolute host paths.
 
 The mounted tree preserves the original absolute path layout. For example, if `/nix/store/aaa-package` is allowed, it appears inside the mount as `MOUNTPOINT/nix/store/aaa-package`.
 
-The implementation is focused on these behaviors:
+Current behavior:
 
-- expose exact allowed files
-- expose allowed directories and all descendants
-- expose symlinks as symlinks
-- hide unrelated sibling paths
-- support normal userspace `read()`
-- optionally attempt Linux FUSE fd passthrough and fall back cleanly
+- exact allowed files are visible
+- allowed directories are visible with their descendants
+- symlinks are exposed as symlinks
+- unrelated sibling paths are hidden
+- writes are rejected
+- normal userspace reads are used unless `--passthrough` is requested
+- with `--passthrough`, passthrough is attempted first; failures are logged by the daemon and then userspace reads are used
 
 ## Public API
 
-The crate currently exposes three main public items from [src/lib.rs](/home/deng/nix-fuse/src/lib.rs).
+The library API is implemented in [src/lib.rs](/home/deng/nix-fuse/src/lib.rs).
 
 ### `PathViewOptions`
 
@@ -28,46 +29,48 @@ pub struct PathViewOptions {
 }
 ```
 
-Purpose:
+Fields:
 
-- `enable_passthrough`: enable phase 6 fd-passthrough attempts in `open()`
-- `no_exec`: add `MountOption::NoExec` to the mount options
+- `enable_passthrough`: requests Linux FUSE fd passthrough during `init()` and `open()`
+- `no_exec`: adds `MountOption::NoExec` to the FUSE mount
 
-Notes:
-
-- `enable_passthrough = true` does not guarantee passthrough will be used
-- if passthrough setup fails, the filesystem falls back to ordinary userspace reads
-- `no_exec` should stay `false` if you want to execute binaries from the mounted closure
+If `enable_passthrough` is true and `open_backing()` fails, the daemon prints the real error to stderr and falls back to ordinary userspace reads.
 
 ### `PathViewFs`
 
-`PathViewFs` is the core filesystem object implementing `fuser::Filesystem`.
+```rust
+pub struct PathViewFs { ... }
+```
+
+`PathViewFs` is the core filesystem object and implements `fuser::Filesystem`.
 
 Constructors:
 
 ```rust
 pub fn new(allowed_paths: Vec<PathBuf>) -> io::Result<Self>
+
 pub fn with_options(
     allowed_paths: Vec<PathBuf>,
     options: PathViewOptions,
 ) -> io::Result<Self>
 ```
 
-Behavior:
+Rules enforced at construction:
 
-- every input path must be absolute
-- parent directories are synthesized as virtual directories
-- real nodes preserve the same absolute path shape in the mounted view
-- directory descendants are materialized lazily
+- every allowed path must be absolute
+- parent path prefixes are created as virtual directories
+- real path nodes preserve absolute host path shape inside the mount
+- directory roots get `allow_descendants = true`
+- regular files and symlinks are exact entries only
 
-Useful public helpers:
+Public helpers:
 
 ```rust
 pub fn attr_for_node(&self, ino: INodeNo) -> io::Result<FileAttr>
 pub fn list_dir(&self, ino: INodeNo) -> io::Result<Vec<DirEntry>>
 ```
 
-These are primarily helpful for internal verification and tests.
+These are mostly useful for tests and internal inspection.
 
 ### `DirEntry`
 
@@ -79,10 +82,7 @@ pub struct DirEntry {
 }
 ```
 
-Purpose:
-
-- represents one directory entry in the filtered view
-- used by `list_dir()` and then emitted by `readdir()`
+`DirEntry` represents one visible directory entry returned by `list_dir()` and emitted by `readdir()`.
 
 ### `mount_path_view`
 
@@ -94,17 +94,22 @@ pub fn mount_path_view(
 ) -> anyhow::Result<()>
 ```
 
-Purpose:
+This function:
 
-- build a `PathViewFs`
-- configure read-only FUSE mount options
-- mount the filesystem using `fuser::mount2`
+- creates `PathViewFs`
+- applies FUSE mount options
+- calls `fuser::mount2`
 
-Important behavior:
+Mount options always include:
 
-- this call blocks until the mount is unmounted
-- mount options always include `RO`, `NoSuid`, `NoDev`, and `FSName("nix-closure-view")`
-- `NoExec` is added only when requested
+- `MountOption::RO`
+- `MountOption::NoSuid`
+- `MountOption::NoDev`
+- `MountOption::FSName("nix-closure-view")`
+
+`MountOption::NoExec` is added only when `PathViewOptions::no_exec` is true.
+
+`fuser::mount2` blocks until the filesystem is unmounted.
 
 ### `load_allowed_paths_from_file`
 
@@ -112,41 +117,55 @@ Important behavior:
 pub fn load_allowed_paths_from_file(path: &Path) -> anyhow::Result<Vec<PathBuf>>
 ```
 
-Purpose:
+This loads newline-separated absolute paths from a closure file.
 
-- load newline-separated absolute paths from a text file
-- this is the phase 5 workflow entry point for closure files such as `closure.txt`
-
-Validation:
+Rules:
 
 - blank lines are ignored
-- every non-empty line must be an absolute path
+- every non-empty line must be absolute
+- relative paths are rejected with an error
 
-## CLI Wrapper
+### `parse_allowed_paths`
 
-The binary entry point is [src/main.rs](/home/deng/nix-fuse/src/main.rs).
+```rust
+pub fn parse_allowed_paths(contents: &str, source_name: &str) -> anyhow::Result<Vec<PathBuf>>
+```
+
+This parses newline-separated absolute paths from any string source.
+
+It is used by both:
+
+- `load_allowed_paths_from_file`
+- the CLI `--paths-stdin` mode
+
+## CLI
+
+The binary wrapper is implemented in [src/main.rs](/home/deng/nix-fuse/src/main.rs).
 
 Usage:
 
 ```bash
-nix-closure-fuser [--passthrough] [--no-exec] [--paths-file closure.txt] <mountpoint> [allowed-path ...]
+nix-closure-fuser [--passthrough] [--no-exec] [--paths-file closure.txt | --paths-stdin] <mountpoint> [allowed-path ...]
 ```
 
-Supported options:
+Options:
 
 - `--paths-file <file>`: load allowed paths from a newline-separated file
-- `--passthrough`: enable optional fd-passthrough attempts
+- `--paths-stdin`: read newline-separated allowed paths from standard input
+- `--passthrough`: request FUSE fd passthrough with logged userspace-read fallback
 - `--no-exec`: mount with `NoExec`
+- `--help`: print usage
 
-Input rules:
+Input model:
 
-- the first positional argument is the mountpoint
+- first positional argument is the mountpoint
 - remaining positional arguments are allowed absolute paths
-- you must provide at least one allowed path either directly or through `--paths-file`
+- at least one allowed path must be provided directly, through `--paths-file`, or through `--paths-stdin`
+- `--paths-file` and `--paths-stdin` are mutually exclusive
 
-## FUSE API Implemented
+## FUSE Callbacks
 
-The filesystem implements these callbacks in [src/lib.rs](/home/deng/nix-fuse/src/lib.rs):
+The implemented callbacks are:
 
 - `init`
 - `lookup`
@@ -161,74 +180,142 @@ The filesystem implements these callbacks in [src/lib.rs](/home/deng/nix-fuse/sr
 - `access`
 - `statfs`
 
-### Behavior Summary
+### `init`
 
-#### `lookup`
+`init()` now performs explicit passthrough setup diagnostics.
 
-- resolves a child name under a parent inode
+It logs:
+
+- whether passthrough was requested
+- whether `NoExec` is enabled
+- the effective capability mask from `/proc/self/status`
+- whether `CAP_SYS_ADMIN` is present
+- the kernel-advertised FUSE capabilities from `KernelConfig::capabilities()`
+
+When passthrough is requested, it also:
+
+- calls `config.add_capabilities(InitFlags::FUSE_PASSTHROUGH)`
+- logs whether the request succeeded
+- calls `config.set_max_stack_depth(1)`
+- logs the previous stack depth returned by `fuser`
+
+Expected successful startup lines look like:
+
+```text
+init: passthrough_requested=true, no_exec=false
+init: capability check: CapEff=0x0000000000200000, CAP_SYS_ADMIN=true
+init: kernel capabilities: ...
+init: requested FUSE_PASSTHROUGH capability successfully
+init: attempting passthrough setup with max_stack_depth=1
+init: set_max_stack_depth(1) succeeded, negotiated=0
+```
+
+The `negotiated=0` text is the previous stack depth returned by `fuser`, not a failure indicator.
+
+### `lookup`
+
+`lookup(parent, name)` is the visibility gate.
+
+It:
+
 - checks prebuilt children first
-- lazily materializes descendants only when the parent is an allowed real directory
+- lazily materializes descendants under allowed real directories
 - returns `ENOENT` for hidden siblings
 
-#### `getattr`
+### `getattr`
 
-- returns synthetic directory attributes for virtual directories
-- uses `symlink_metadata` for real nodes so symlinks remain symlinks
+`getattr(ino)` returns attributes for a visible inode.
 
-#### `readlink`
+It:
 
-- returns the original symlink target bytes from the backing filesystem
-- does not rewrite absolute symlink targets
+- returns synthetic `0o555` directory attributes for virtual directories
+- uses `symlink_metadata` for real nodes
+- preserves symlink file type instead of following symlinks
 
-#### `opendir` / `readdir` / `releasedir`
+### `readlink`
 
-- directory open uses a dummy handle
+`readlink(ino)` returns the backing symlink target bytes.
+
+The target is not rewritten. Absolute symlinks still point to their original absolute target.
+
+### `opendir`, `readdir`, `releasedir`
+
+Directory behavior:
+
+- `opendir` uses a dummy file handle
 - `readdir` injects `.` and `..`
-- virtual directories list only prebuilt children
-- real allowed directories scan the backing directory and lazily materialize visible descendants
+- virtual directories list prebuilt children only
+- real allowed directories scan the backing directory and materialize visible children lazily
+- `releasedir` returns success
 
-#### `open` / `read` / `release`
+### `open`, `read`, `release`
 
-- only read-only opens are allowed
-- regular file I/O uses a stored file handle
-- reads use `FileExt::read_at`
-- optional passthrough is attempted in `open()`
-- `BackingId` is retained in `OpenFile` until `release()`
+`open()` rejects non-read-only access with `EROFS`.
 
-#### `access`
+Without `--passthrough`:
 
-- visible nodes pass read and execute style checks
-- write checks return `EROFS`
+- the backing file is opened with `File::open`
+- an `OpenFile` is stored with `backing_id = None`
+- `reply.opened(...)` is returned
+- `read()` serves bytes with `FileExt::read_at`
 
-#### `statfs`
+With `--passthrough`:
 
-- returns simple synthetic filesystem statistics
+- `open()` calls `reply.open_backing(&file)`
+- on success, the returned `BackingId` is stored in `OpenFile`
+- `reply.opened_passthrough(...)` is returned
+- on failure, the daemon logs the real error and falls back to `reply.opened(...)`
+- fallback reads are served by `read()` with `FileExt::read_at`
+
+`release()` removes the `OpenFile`, which also drops any stored `BackingId`.
+
+### `access`
+
+`access()` verifies that the inode is visible.
+
+Write checks return `EROFS`.
+
+### `statfs`
+
+`statfs()` returns simple synthetic filesystem statistics so common tools can complete their checks.
 
 ## Internal Architecture
 
 ## High-Level Flow
 
 ```text
-allowed paths
-    ->
-PathViewFs::new / with_options
-    ->
-build stable inode table + parent/child indexes
-    ->
-mount_path_view
-    ->
-kernel FUSE requests
-    ->
-lookup/getattr/readdir/open/read/readlink/access/statfs
+CLI or library caller
+    |
+    v
+allowed absolute paths
+    |
+    v
+PathViewFs::new / PathViewFs::with_options
+    |
+    v
+build virtual parents + real allowed roots
+    |
+    v
+fuser::mount2
+    |
+    v
+FUSE init
+    |
+    +-- optional FUSE_PASSTHROUGH negotiation
+    +-- optional max_stack_depth setup
+    +-- capability diagnostics
+    |
+    v
+lookup / getattr / readdir / readlink / open / read
 ```
 
 ## Core Structures
 
 ### `PathViewFs`
 
-`PathViewFs` owns all mutable filesystem state:
+`PathViewFs` owns the filesystem state:
 
-- `tree: RwLock<TreeState)`
+- `tree: RwLock<TreeState>`
 - `next_ino: AtomicU64`
 - `open_files: Mutex<HashMap<FileHandle, OpenFile>>`
 - `next_fh: AtomicU64`
@@ -236,44 +323,37 @@ lookup/getattr/readdir/open/read/readlink/access/statfs
 
 Responsibilities:
 
-- maintain inode stability
-- enforce filtered visibility
+- maintain stable inodes
+- enforce visibility rules
 - manage open file handles
-- coordinate optional passthrough state
+- keep passthrough `BackingId` values alive until release
 
 ### `TreeState`
 
-`TreeState` is the in-memory path graph:
+`TreeState` is the inode and path index:
 
 - `nodes: HashMap<INodeNo, Node>`
 - `children: HashMap<INodeNo, BTreeMap<OsString, INodeNo>>`
 - `path_index: HashMap<PathBuf, INodeNo>`
 
-Purpose:
-
-- `nodes`: inode to node metadata
-- `children`: parent inode to sorted child map
-- `path_index`: virtual path to inode lookup
+`BTreeMap` is used for child maps so directory listings are deterministic.
 
 ### `Node`
 
-Two node classes are used:
-
 ```text
-VirtualDir
-Real
+Node::VirtualDir
+Node::Real
 ```
 
 `VirtualDir`:
 
-- synthetic directory created to connect absolute path prefixes
-- example: `/`, `/nix`, `/nix/store`
+- synthetic path prefix
+- examples: `/`, `/home`, `/home/deng`, `/nix`, `/nix/store`
 
 `Real`:
 
 - backed by an actual host path
-- stores both `virtual_path` and `real_path`
-- `allow_descendants = true` means lazy subtree expansion is allowed
+- stores `virtual_path`, `real_path`, `parent`, and `allow_descendants`
 
 ### `OpenFile`
 
@@ -282,19 +362,65 @@ Real
 - `file: File`
 - `backing_id: Option<BackingId>`
 
-Purpose:
+`backing_id` is `Some(...)` only after successful passthrough registration.
 
-- support ordinary userspace file reads
-- keep passthrough backing registrations alive until `release()`
+## Architecture Diagram
+
+```text
+                 +-------------------------------+
+                 | src/main.rs                    |
+                 | CLI args -> PathViewOptions    |
+                 +---------------+---------------+
+                                 |
+                                 v
+                 +-------------------------------+
+                 | load_allowed_paths_from_file   |
+                 | optional closure.txt loader    |
+                 +---------------+---------------+
+                                 |
+                                 v
+                 +-------------------------------+
+                 | mount_path_view                |
+                 | RO/NoSuid/NoDev mount options  |
+                 +---------------+---------------+
+                                 |
+                                 v
+        +------------------------------------------------+
+        | PathViewFs                                     |
+        |------------------------------------------------|
+        | tree: RwLock<TreeState>                       |
+        | open_files: Mutex<HashMap<FileHandle, ...>>    |
+        | options: PathViewOptions                       |
+        +-------------------------+----------------------+
+                                  |
+              +-------------------+-------------------+
+              |                                       |
+              v                                       v
+  +-------------------------+           +-----------------------------+
+  | TreeState               |           | OpenFile table              |
+  |-------------------------|           |-----------------------------|
+  | nodes                   |           | userspace File              |
+  | children                |           | optional BackingId          |
+  | path_index              |           +-----------------------------+
+  +------------+------------+
+               |
+               v
+     +----------------------+
+     | Node                 |
+     |----------------------|
+     | VirtualDir           |
+     | Real                 |
+     +----------------------+
+```
 
 ## Visibility Model
 
-The implementation follows this rule set:
+Allowed path behavior:
 
-- allowed file: expose exactly that file
-- allowed directory: expose that directory and descendants
-- allowed symlink: expose the symlink itself only
-- unlisted sibling path: hidden
+- regular file: expose exactly that file
+- directory: expose that directory and descendants
+- symlink: expose the symlink itself
+- unrelated sibling: hide it
 
 Example:
 
@@ -314,72 +440,50 @@ hidden:
 
 ## Lazy Materialization
 
-The filesystem does not pre-scan entire allowed directory trees.
+The filesystem avoids pre-scanning large trees.
 
-Resolution path:
+Resolution order:
 
-1. `lookup(parent, name)` checks `children[parent]`
-2. if present, return the known inode
-3. otherwise, if `parent` is a real directory with `allow_descendants = true`, inspect `real_path.join(name)`
-4. if the child exists, create a new `Real` node and cache it
-5. otherwise, return `ENOENT`
+1. check `children[parent][name]`
+2. return cached inode if found
+3. if parent is a real directory with `allow_descendants = true`, inspect `real_path.join(name)`
+4. if the child exists, create and cache a `Real` node
+5. otherwise return `ENOENT`
 
-This keeps startup cost low for large Nix closures.
+## Passthrough Requirements
 
-## Architecture Diagram
+Passthrough mode depends on kernel and runtime support.
 
-```text
-                         +----------------------+
-                         |  src/main.rs         |
-                         |  minimal CLI wrapper |
-                         +----------+-----------+
-                                    |
-                                    v
-                         +----------------------+
-                         | load_allowed_paths_  |
-                         | from_file()          |
-                         +----------+-----------+
-                                    |
-                                    v
-                         +----------------------+
-                         | mount_path_view()    |
-                         | mount2 + RO options  |
-                         +----------+-----------+
-                                    |
-                                    v
-                    +--------------------------------------+
-                    | PathViewFs                           |
-                    |--------------------------------------|
-                    | tree: RwLock<TreeState>             |
-                    | next_ino: AtomicU64                 |
-                    | open_files: Mutex<HashMap<...>>     |
-                    | next_fh: AtomicU64                  |
-                    | options: PathViewOptions            |
-                    +----------------+---------------------+
-                                     |
-                    +----------------+----------------+
-                    |                                 |
-                    v                                 v
-         +-------------------------+      +--------------------------+
-         | TreeState               |      | OpenFile table           |
-         |-------------------------|      |--------------------------|
-         | nodes                   |      | file: File               |
-         | children                |      | backing_id: BackingId?   |
-         | path_index              |      +--------------------------+
-         +------------+------------+
-                      |
-                      v
-            +----------------------+
-            | Node                 |
-            |----------------------|
-            | VirtualDir           |
-            | Real                 |
-            +----------------------+
+Required conditions:
+
+- kernel has `CONFIG_FUSE_PASSTHROUGH=y`
+- kernel advertises `FUSE_PASSTHROUGH`
+- daemon requests `InitFlags::FUSE_PASSTHROUGH`
+- daemon configures a valid `max_stack_depth`
+- daemon has the required privilege, typically `CAP_SYS_ADMIN`
+- backing filesystem stack depth is compatible
+
+Useful checks:
+
+```bash
+zgrep -H '^CONFIG_FUSE_PASSTHROUGH=' /proc/config.gz
+```
+
+```bash
+cat /proc/$(pidof nix-closure-fuser)/status | grep CapEff
+```
+
+```bash
+stat -f -c %T /absolute/backing/file
+```
+
+```bash
+findmnt -T /absolute/backing/file
 ```
 
 ## Build Commands
 
-Use these commands from the repository root:
+From the repository root:
 
 ```bash
 cargo check
@@ -389,106 +493,116 @@ cargo check
 cargo build
 ```
 
-If you want test-only validation for the tree logic:
-
 ```bash
 cargo test
 ```
 
 ## Manual Test Commands
 
-The filesystem is intended to be validated manually after build.
-
-### 1. Prepare a mountpoint
+### Prepare a mountpoint
 
 ```bash
 mkdir -p filtered-mnt
 ```
 
-### 2. Run with direct allowed paths
-
-Example with a Nix store path:
+### Mount a single file
 
 ```bash
-cargo run -- filtered-mnt /nix/store/aaa-package
+./target/debug/nix-closure-fuser filtered-mnt "$(pwd)/API_AND_ARCHITECTURE.md"
 ```
 
-Example with two store paths:
+In another shell:
 
 ```bash
-cargo run -- filtered-mnt /nix/store/aaa-package /nix/store/bbb-package
-```
-
-Example with a regular file:
-
-```bash
-cargo run -- filtered-mnt /absolute/path/to/file.txt
-```
-
-### 3. Run with a closure file
-
-Generate the closure file:
-
-```bash
-nix-store -qR ./result > closure.txt
-```
-
-Mount from that file:
-
-```bash
-cargo run -- --paths-file closure.txt filtered-mnt
-```
-
-### 4. Run with passthrough enabled
-
-```bash
-cargo run -- --passthrough filtered-mnt /nix/store/aaa-package
-```
-
-Expected behavior:
-
-- if the kernel and privileges support passthrough, `open_backing` can be used
-- if not, normal userspace reads should still work
-
-### 5. Run with `NoExec`
-
-```bash
-cargo run -- --no-exec filtered-mnt /nix/store/aaa-package
-```
-
-## Functional Test Commands
-
-Run these commands in another shell while the mount is active.
-
-### Directory visibility
-
-```bash
-ls filtered-mnt
+ls filtered-mnt"$(pwd)"/API_AND_ARCHITECTURE.md
 ```
 
 ```bash
-ls filtered-mnt/nix
+cat filtered-mnt"$(pwd)"/API_AND_ARCHITECTURE.md
 ```
+
+### Mount a Nix store path
+
+```bash
+./target/debug/nix-closure-fuser filtered-mnt /nix/store/aaa-package
+```
+
+In another shell:
 
 ```bash
 ls filtered-mnt/nix/store
 ```
 
-Expected result:
+```bash
+ls filtered-mnt/nix/store/aaa-package
+```
 
-- only allowed store roots should appear under `filtered-mnt/nix/store`
+### Mount from a closure file
 
-### File reads
+Generate closure paths externally:
 
 ```bash
-cat filtered-mnt/nix/store/aaa-package/some-file
+nix-store -qR ./result > closure.txt
+```
+
+Mount them:
+
+```bash
+./target/debug/nix-closure-fuser --paths-file closure.txt filtered-mnt
+```
+
+### Mount from stdin
+
+This is the direct pipe workflow for a Nix closure:
+
+```bash
+nix-store -qR "$DEVENV_PROFILE" | ./target/debug/nix-closure-fuser --paths-stdin filtered-mnt
+```
+
+The input must contain one absolute path per line. Blank lines are ignored.
+
+### Test passthrough
+
+```bash
+./target/debug/nix-closure-fuser --passthrough filtered-mnt "$(pwd)/API_AND_ARCHITECTURE.md"
+```
+
+Expected successful init diagnostics include:
+
+```text
+init: requested FUSE_PASSTHROUGH capability successfully
+init: set_max_stack_depth(1) succeeded
+```
+
+In another shell:
+
+```bash
+cat filtered-mnt"$(pwd)"/API_AND_ARCHITECTURE.md
+```
+
+If passthrough open fails, stderr prints:
+
+```text
+passthrough open failed for <path>, falling back to userspace read: <real os error>
+```
+
+The caller should still be able to read the file through normal FUSE userspace I/O after this fallback.
+
+### Test hidden siblings
+
+If only `/nix/store/aaa-package` was allowed:
+
+```bash
+ls filtered-mnt/nix/store/bbb-package
 ```
 
 Expected result:
 
-- file contents should match the backing file
+```text
+No such file or directory
+```
 
-### Symlink reads
+### Test symlinks
 
 ```bash
 readlink filtered-mnt/nix/store/aaa-package/some-link
@@ -496,36 +610,11 @@ readlink filtered-mnt/nix/store/aaa-package/some-link
 
 Expected result:
 
-- the symlink target should match the original backing symlink target
+- the same symlink target as the backing filesystem
 
-### Forbidden sibling check
+### Test read-only behavior
 
-```bash
-ls filtered-mnt/nix/store/ccc-package
-```
-
-Expected result:
-
-- `No such file or directory`
-
-### File input test
-
-```bash
-ls filtered-mnt/absolute/path/to
-```
-
-```bash
-cat filtered-mnt/absolute/path/to/file.txt
-```
-
-Expected result:
-
-- the exact file is visible
-- unrelated siblings are not visible unless explicitly allowed
-
-### Read-only enforcement
-
-These commands should fail:
+These should fail:
 
 ```bash
 touch filtered-mnt/nix/store/aaa-package/new-file
@@ -537,30 +626,43 @@ mkdir filtered-mnt/nix/store/aaa-package/new-dir
 
 Expected result:
 
-- write operations should fail with a read-only filesystem style error
+- read-only filesystem or permission-style error
 
-## Unmount Command
+## Unmounting
 
-Use whichever unmount command is available in your environment:
+Clean unmount:
 
 ```bash
 fusermount -u filtered-mnt
 ```
 
-or:
+If the mount is stale after an interrupted daemon:
+
+```bash
+fusermount -uz filtered-mnt
+```
+
+Alternative:
 
 ```bash
 umount filtered-mnt
 ```
 
+Lazy unmount fallback:
+
+```bash
+umount -l filtered-mnt
+```
+
 ## Current Limitations
 
 - no write support
-- no mkdir, create, unlink, rename, or setattr operations
-- no mount namespace integration
+- no create, mkdir, unlink, rename, symlink, link, or setattr support
+- no automatic signal handler for clean `Ctrl-C` unmount
+- no mount namespace setup
 - no symlink target rewriting
-- no hardening against mutable-path race conditions
-- passthrough support depends on kernel support and privilege
+- no race hardening for mutable arbitrary host paths
+- passthrough stack depth is currently fixed at `1`
 
 ## Source Map
 
