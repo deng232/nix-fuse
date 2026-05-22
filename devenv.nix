@@ -12,6 +12,8 @@
     pkg-config
     nix.dev
     nsjail
+    #busybox
+    #sudo
   ];
   languages.rust.enable = true;
 }
