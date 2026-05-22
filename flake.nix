@@ -54,11 +54,25 @@
       );
 
       apps = forAllSystems (
-        { system, ... }:
+        { system, pkgs, ... }:
+        let
+          package = self.packages.${system}.nix-closure-fuser;
+        in
         {
           nix-closure-fuser = {
             type = "app";
-            program = "${self.packages.${system}.nix-closure-fuser}/bin/nix-closure-fuser";
+            program = "${package}/bin/nix-closure-fuser";
+          };
+
+          nix-closure-fuser-setcap = {
+            type = "app";
+            program = toString (
+              pkgs.writeShellScript "nix-closure-fuser-setcap" ''
+                set -euo pipefail
+                sudo setcap cap_sys_admin+ep ${package}/bin/nix-closure-fuser
+                exec ${package}/bin/nix-closure-fuser "$@"
+              ''
+            );
           };
 
           default = self.apps.${system}.nix-closure-fuser;
