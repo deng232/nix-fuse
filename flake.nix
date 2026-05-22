@@ -69,8 +69,13 @@
             program = toString (
               pkgs.writeShellScript "nix-closure-fuser-setcap" ''
                 set -euo pipefail
-                sudo setcap cap_sys_admin+ep ${package}/bin/nix-closure-fuser
-                exec ${package}/bin/nix-closure-fuser "$@"
+
+                tmpdir="$(mktemp -d -t nix-closure-fuser.XXXXXXXXXX)"
+                trap 'rm -rf "$tmpdir"' EXIT
+                dst="$tmpdir/nix-closure-fuser"
+                install -m 0755 ${package}/bin/nix-closure-fuser "$dst"
+                sudo setcap cap_sys_admin+ep "$dst"
+                "$dst" "$@"
               ''
             );
           };
