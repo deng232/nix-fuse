@@ -6,4 +6,4 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 fuser = "0.17"
-nix = { version = "0.31", features = ["fs"] }
+nix = { version = "0.31", features = ["fs", "process", "signal"] }

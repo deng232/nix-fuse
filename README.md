@@ -23,7 +23,7 @@ Unlisted sibling paths are hidden.
 ## Usage
 
 ```bash
-nix-closure-fuser [--passthrough] [--no-exec] [--paths-file closure.txt | --paths-stdin] <mountpoint> [allowed-path ...]
+nix-closure-fuser [--daemonize] [--daemon-output log.txt] [--passthrough] [--no-exec] [--paths-file closure.txt | --paths-stdin] <mountpoint> [allowed-path ...]
 ```
 
 Allowed paths must be absolute.
@@ -46,6 +46,20 @@ nix-closure-fuser --paths-file closure.txt filtered-mnt
 
 ```bash
 nix-store -qR "$DEVENV_PROFILE" | nix-closure-fuser --paths-stdin filtered-mnt
+```
+
+### Daemon mode
+
+```bash
+nix-store -qR "$DEVENV_PROFILE" | nix-closure-fuser --daemonize --paths-stdin filtered-mnt
+```
+
+Daemon mode forks after input validation. The parent prints the child PID to stdout, writes readable status to stderr, and exits immediately while the child serves the blocking FUSE runtime.
+
+The child redirects stdout and stderr to `./nix-closure-fuser.log` by default. Use `--daemon-output` to choose another file:
+
+```bash
+nix-store -qR "$DEVENV_PROFILE" | nix-closure-fuser --daemonize --daemon-output fuser.log --paths-stdin filtered-mnt
 ```
 
 ### Passthrough
@@ -73,6 +87,8 @@ nix-closure-fuser --no-exec filtered-mnt /nix/store/aaa-package
 - Hides unlisted sibling paths.
 - Lazily materializes directory children.
 - Supports path input from positional args, `--paths-file`, and `--paths-stdin`.
+- Supports `--daemonize` by forking a child FUSE runtime and printing its PID to stdout.
+- Supports child stdout/stderr redirection with `--daemon-output`, defaulting to `./nix-closure-fuser.log`.
 - Supports normal userspace file reads.
 - Optionally attempts Linux FUSE passthrough.
 - Falls back to userspace reads if passthrough open fails.

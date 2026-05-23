@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{OsStr, OsString};
-use std::fs::{self, File, Metadata};
+use std::fs::{self, File, Metadata, OpenOptions};
 use std::io;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::io::AsRawFd;
 use std::os::unix::fs::{FileExt, FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -18,6 +19,8 @@ use fuser::{
     ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, Request,
 };
 use nix::errno::Errno;
+use nix::libc;
+use nix::unistd::{fork, setsid, ForkResult};
 
 const ROOT_INO: INodeNo = INodeNo::ROOT;
 const TTL: Duration = Duration::from_secs(1);
@@ -703,8 +706,70 @@ pub fn mount_path_view(
     mountpoint: &Path,
     options: PathViewOptions,
 ) -> Result<()> {
-    let fs = PathViewFs::with_options(allowed_paths, options)?;
+    let path_view_fs = PathViewFs::with_options(allowed_paths, options)?;
+    let config = mount_config(options);
 
+    fuser::mount2(path_view_fs, mountpoint, &config)
+        .with_context(|| format!("failed to mount path view at {}", mountpoint.display()))?;
+    Ok(())
+}
+
+pub fn mount_path_view_daemonized(
+    allowed_paths: Vec<PathBuf>,
+    mountpoint: &Path,
+    options: PathViewOptions,
+    output_path: &Path,
+) -> Result<()> {
+    let path_view_fs = PathViewFs::with_options(allowed_paths, options)?;
+    let config = mount_config(options);
+    let output_path = output_path.to_path_buf();
+
+    match unsafe { fork() }.map_err(|err| anyhow!("failed to fork daemon process: {err}"))? {
+        ForkResult::Child => {
+            redirect_daemon_output(&output_path)?;
+            setsid().map_err(|err| anyhow!("failed to create daemon session: {err}"))?;
+            fuser::mount2(path_view_fs, &mountpoint, &config).with_context(|| {
+                format!("failed to mount path view at {}", mountpoint.display())
+            })?;
+            Ok(())
+        }
+        ForkResult::Parent { child } => {
+            println!("{child}");
+            eprintln!(
+                "daemonized nix-closure-fuser starting for {}, child output: {}",
+                mountpoint.display(),
+                output_path.display()
+            );
+
+            Ok(())
+        }
+    }
+}
+
+fn redirect_daemon_output(output_path: &Path) -> Result<()> {
+    let output = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(output_path)
+        .with_context(|| format!("failed to open daemon output file {}", output_path.display()))?;
+    let output_fd = output.as_raw_fd();
+
+    for target_fd in [libc::STDOUT_FILENO, libc::STDERR_FILENO] {
+        if unsafe { libc::dup2(output_fd, target_fd) } == -1 {
+            let err = io::Error::last_os_error();
+            return Err(anyhow!(
+                "failed to redirect daemon output fd {} to {}: {}",
+                target_fd,
+                output_path.display(),
+                err
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn mount_config(options: PathViewOptions) -> Config {
     let mut config = Config::default();
     config.mount_options = vec![
         MountOption::RO,
@@ -716,9 +781,7 @@ pub fn mount_path_view(
         config.mount_options.push(MountOption::NoExec);
     }
 
-    fuser::mount2(fs, mountpoint, &config)
-        .with_context(|| format!("failed to mount path view at {}", mountpoint.display()))?;
-    Ok(())
+    config
 }
 
 pub fn load_allowed_paths_from_file(path: &Path) -> Result<Vec<PathBuf>> {
