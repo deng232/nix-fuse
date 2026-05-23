@@ -54,7 +54,7 @@ nix-store -qR "$DEVENV_PROFILE" | nix-closure-fuser --paths-stdin filtered-mnt
 nix-store -qR "$DEVENV_PROFILE" | nix-closure-fuser --daemonize --paths-stdin filtered-mnt
 ```
 
-Daemon mode forks after input validation. The parent prints the child PID to stdout, writes readable status to stderr, and exits immediately while the child serves the blocking FUSE runtime.
+Daemon mode mounts first, then forks. The parent prints the child PID to stdout, writes readable status to stderr, and exits immediately while the child inherits the mounted FUSE session and serves the runtime.
 
 The child redirects stdout and stderr to `./nix-closure-fuser.log` by default. Use `--daemon-output` to choose another file:
 

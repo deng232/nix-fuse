@@ -3,8 +3,8 @@ use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::io::AsRawFd;
 use std::os::unix::fs::{FileExt, FileTypeExt, MetadataExt};
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -17,6 +17,7 @@ use fuser::{
     AccessFlags, BackingId, Config, FileAttr, FileHandle, FileType, Filesystem, FopenFlags,
     Generation, INodeNo, InitFlags, KernelConfig, LockOwner, MountOption, OpenAccMode, OpenFlags,
     ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, Request,
+    Session,
 };
 use nix::errno::Errno;
 use nix::libc;
@@ -723,17 +724,17 @@ pub fn mount_path_view_daemonized(
     let path_view_fs = PathViewFs::with_options(allowed_paths, options)?;
     let config = mount_config(options);
     let output_path = output_path.to_path_buf();
+    let session = Session::new(path_view_fs, mountpoint, &config)
+        .with_context(|| format!("failed to mount path view at {}", mountpoint.display()))?;
 
-    match unsafe { fork() }.map_err(|err| anyhow!("failed to fork daemon process: {err}"))? {
-        ForkResult::Child => {
+    match unsafe { fork() } {
+        Ok(ForkResult::Child) => {
             redirect_daemon_output(&output_path)?;
             setsid().map_err(|err| anyhow!("failed to create daemon session: {err}"))?;
-            fuser::mount2(path_view_fs, &mountpoint, &config).with_context(|| {
-                format!("failed to mount path view at {}", mountpoint.display())
-            })?;
+            session.spawn()?.join()?;
             Ok(())
         }
-        ForkResult::Parent { child } => {
+        Ok(ForkResult::Parent { child }) => {
             println!("{child}");
             eprintln!(
                 "daemonized nix-closure-fuser starting for {}, child output: {}",
@@ -741,7 +742,13 @@ pub fn mount_path_view_daemonized(
                 output_path.display()
             );
 
+            std::mem::forget(session);
             Ok(())
+        }
+        Err(err) => {
+            let mut session = session;
+            let _ = session.unmount();
+            Err(anyhow!("failed to fork daemon process: {err}"))
         }
     }
 }
